@@ -1,27 +1,7 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
-
-interface ASLSign {
-  letter: string;
-  description: string;
-  fingers: string;
-}
-
-const aslSigns: ASLSign[] = [
-  { letter: "A", description: "Fist with thumb beside", fingers: "👊" },
-  { letter: "B", description: "Flat hand, fingers up", fingers: "🖐" },
-  { letter: "C", description: "Curved hand shape", fingers: "🤏" },
-  { letter: "D", description: "Index up, others curved", fingers: "☝️" },
-  { letter: "E", description: "All fingers curled in", fingers: "✊" },
-  { letter: "F", description: "OK sign position", fingers: "👌" },
-  { letter: "I", description: "Pinky finger up only", fingers: "🤙" },
-  { letter: "L", description: "L shape with thumb/index", fingers: "🤟" },
-  { letter: "O", description: "Fingers meet thumb", fingers: "👌" },
-  { letter: "V", description: "Peace sign", fingers: "✌️" },
-  { letter: "W", description: "Three fingers up", fingers: "🤟" },
-  { letter: "Y", description: "Thumb and pinky out", fingers: "🤙" },
-  { letter: "5", description: "Open palm, all fingers", fingers: "🖐" },
-];
+import { aslAlphabet, ASLSign } from "@/lib/aslRecognition";
+import { ChevronDown, ChevronUp, BookOpen } from "lucide-react";
 
 interface ASLReferenceProps {
   highlightedLetter: string | null;
@@ -29,58 +9,145 @@ interface ASLReferenceProps {
 
 const ASLReference = ({ highlightedLetter }: ASLReferenceProps) => {
   const [expandedLetter, setExpandedLetter] = useState<string | null>(null);
+  const [isExpanded, setIsExpanded] = useState(true);
+  const [imageLoadError, setImageLoadError] = useState<Set<string>>(new Set());
+
+  const handleImageError = (letter: string) => {
+    setImageLoadError(prev => new Set(prev).add(letter));
+  };
 
   return (
-    <div className="glass-card p-6">
-      <h2 className="font-display text-xl font-bold mb-4 gradient-text">
-        ASL Reference Guide
-      </h2>
-      <p className="text-sm text-muted-foreground mb-4">
-        Try these signs in front of the camera
-      </p>
-      
-      <div className="grid grid-cols-4 sm:grid-cols-5 gap-2">
-        {aslSigns.map((sign) => (
-          <button
-            key={sign.letter}
-            onClick={() => setExpandedLetter(expandedLetter === sign.letter ? null : sign.letter)}
-            className={cn(
-              "relative p-3 rounded-xl transition-all duration-300 border-2",
-              "hover:scale-105 active:scale-95",
-              highlightedLetter === sign.letter
-                ? "border-accent bg-accent/20 glow-accent"
-                : "border-border/50 bg-secondary/50 hover:border-primary/50",
-              expandedLetter === sign.letter && "ring-2 ring-primary"
-            )}
-          >
-            <div className="text-2xl mb-1">{sign.fingers}</div>
-            <div className={cn(
-              "font-display font-bold text-lg",
-              highlightedLetter === sign.letter ? "gradient-accent-text" : "text-foreground"
-            )}>
-              {sign.letter}
-            </div>
-            
-            {highlightedLetter === sign.letter && (
-              <div className="absolute -top-1 -right-1 w-4 h-4 bg-accent rounded-full animate-pulse" />
-            )}
-          </button>
-        ))}
-      </div>
+    <div className="glass-card overflow-hidden">
+      {/* Header */}
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="w-full p-4 flex items-center justify-between hover:bg-secondary/50 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          <BookOpen className="w-5 h-5 text-primary" />
+          <h2 className="font-display text-lg font-bold gradient-text">
+            ASL Alphabet Guide (A-Z)
+          </h2>
+        </div>
+        {isExpanded ? (
+          <ChevronUp className="w-5 h-5 text-muted-foreground" />
+        ) : (
+          <ChevronDown className="w-5 h-5 text-muted-foreground" />
+        )}
+      </button>
 
-      {expandedLetter && (
-        <div className="mt-4 p-4 rounded-xl bg-secondary/50 border border-border/50 animate-scale-in">
-          <div className="flex items-center gap-3">
-            <span className="text-4xl">
-              {aslSigns.find(s => s.letter === expandedLetter)?.fingers}
-            </span>
-            <div>
-              <h3 className="font-display font-bold text-lg">{expandedLetter}</h3>
-              <p className="text-sm text-muted-foreground">
-                {aslSigns.find(s => s.letter === expandedLetter)?.description}
-              </p>
-            </div>
+      {isExpanded && (
+        <div className="p-4 pt-0 space-y-4 animate-fade-in">
+          <p className="text-sm text-muted-foreground">
+            Click any letter to see detailed instructions and hand position
+          </p>
+          
+          {/* Letter Grid */}
+          <div className="grid grid-cols-6 sm:grid-cols-9 md:grid-cols-13 gap-2">
+            {aslAlphabet.map((sign) => (
+              <button
+                key={sign.letter}
+                onClick={() => setExpandedLetter(expandedLetter === sign.letter ? null : sign.letter)}
+                className={cn(
+                  "relative p-2 rounded-xl transition-all duration-200 border-2",
+                  "hover:scale-105 active:scale-95 group",
+                  highlightedLetter === sign.letter
+                    ? "border-accent bg-accent/20 glow-accent"
+                    : expandedLetter === sign.letter
+                    ? "border-primary bg-primary/10"
+                    : "border-border/50 bg-secondary/50 hover:border-primary/50"
+                )}
+              >
+                {/* Mini Image */}
+                <div className="w-8 h-8 mx-auto mb-1 rounded overflow-hidden bg-background/50">
+                  {!imageLoadError.has(sign.letter) ? (
+                    <img
+                      src={sign.imageUrl}
+                      alt={`ASL ${sign.letter}`}
+                      className="w-full h-full object-contain"
+                      loading="lazy"
+                      onError={() => handleImageError(sign.letter)}
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-muted-foreground text-xs">
+                      ✋
+                    </div>
+                  )}
+                </div>
+                
+                <div className={cn(
+                  "font-display font-bold text-sm",
+                  highlightedLetter === sign.letter ? "gradient-accent-text" : "text-foreground"
+                )}>
+                  {sign.letter}
+                </div>
+                
+                {highlightedLetter === sign.letter && (
+                  <div className="absolute -top-1 -right-1 w-3 h-3 bg-accent rounded-full animate-pulse" />
+                )}
+              </button>
+            ))}
           </div>
+
+          {/* Expanded Detail View */}
+          {expandedLetter && (
+            <div className="mt-4 p-4 rounded-xl bg-secondary/50 border border-border/50 animate-scale-in">
+              {(() => {
+                const sign = aslAlphabet.find(s => s.letter === expandedLetter);
+                if (!sign) return null;
+                
+                return (
+                  <div className="flex flex-col md:flex-row gap-4">
+                    {/* Large Image */}
+                    <div className="flex-shrink-0">
+                      <div className="w-32 h-32 md:w-40 md:h-40 rounded-xl overflow-hidden bg-background/80 border-2 border-primary/30">
+                        {!imageLoadError.has(sign.letter) ? (
+                          <img
+                            src={sign.imageUrl}
+                            alt={`ASL ${sign.letter} hand sign`}
+                            className="w-full h-full object-contain"
+                            onError={() => handleImageError(sign.letter)}
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-4xl">
+                            ✋
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    
+                    {/* Description */}
+                    <div className="flex-1 space-y-3">
+                      <div>
+                        <h3 className="font-display font-bold text-2xl gradient-text">
+                          Letter {sign.letter}
+                        </h3>
+                        <p className="text-muted-foreground text-sm mt-1">
+                          {sign.description}
+                        </p>
+                      </div>
+                      
+                      <div className="p-3 rounded-lg bg-primary/10 border border-primary/20">
+                        <p className="text-sm font-medium text-primary mb-1">How to sign:</p>
+                        <p className="text-sm text-foreground">
+                          {sign.instruction}
+                        </p>
+                      </div>
+                      
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <span className="px-2 py-1 rounded bg-secondary">
+                          Practice in front of camera
+                        </span>
+                        <span className="px-2 py-1 rounded bg-secondary">
+                          Hold steady for detection
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
         </div>
       )}
     </div>

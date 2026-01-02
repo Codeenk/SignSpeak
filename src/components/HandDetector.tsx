@@ -1,137 +1,25 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Hands, Results, NormalizedLandmarkList } from "@mediapipe/hands";
+import { Hands, Results } from "@mediapipe/hands";
 import { Camera } from "@mediapipe/camera_utils";
 import { drawConnectors, drawLandmarks } from "@mediapipe/drawing_utils";
 import { HAND_CONNECTIONS } from "@mediapipe/hands";
+import { recognizeASLLetter, DetectionStabilizer } from "@/lib/aslRecognition";
 
 interface HandDetectorProps {
   onDetection: (letter: string | null, confidence: number) => void;
   isActive: boolean;
 }
 
-// ASL letter recognition based on hand landmarks
-const recognizeASLLetter = (landmarks: NormalizedLandmarkList): { letter: string; confidence: number } => {
-  if (!landmarks || landmarks.length < 21) {
-    return { letter: "", confidence: 0 };
-  }
-
-  // Get key landmark positions
-  const thumb_tip = landmarks[4];
-  const index_tip = landmarks[8];
-  const middle_tip = landmarks[12];
-  const ring_tip = landmarks[16];
-  const pinky_tip = landmarks[20];
-
-  const thumb_ip = landmarks[3];
-  const index_pip = landmarks[6];
-  const middle_pip = landmarks[10];
-  const ring_pip = landmarks[14];
-  const pinky_pip = landmarks[18];
-
-  const wrist = landmarks[0];
-
-  // Helper functions
-  const isFingerExtended = (tip: typeof thumb_tip, pip: typeof thumb_ip, base: typeof wrist): boolean => {
-    return tip.y < pip.y;
-  };
-
-  const isThumbExtended = (): boolean => {
-    return thumb_tip.x < thumb_ip.x || thumb_tip.y < wrist.y - 0.1;
-  };
-
-  const fingersExtended = {
-    thumb: isThumbExtended(),
-    index: isFingerExtended(index_tip, index_pip, wrist),
-    middle: isFingerExtended(middle_tip, middle_pip, wrist),
-    ring: isFingerExtended(ring_tip, ring_pip, wrist),
-    pinky: isFingerExtended(pinky_tip, pinky_pip, wrist),
-  };
-
-  const extendedCount = Object.values(fingersExtended).filter(Boolean).length;
-
-  // Simple ASL recognition patterns
-  // A - Fist with thumb to the side
-  if (!fingersExtended.index && !fingersExtended.middle && !fingersExtended.ring && !fingersExtended.pinky && fingersExtended.thumb) {
-    return { letter: "A", confidence: 0.85 };
-  }
-
-  // B - All fingers extended, thumb across palm
-  if (fingersExtended.index && fingersExtended.middle && fingersExtended.ring && fingersExtended.pinky && !fingersExtended.thumb) {
-    return { letter: "B", confidence: 0.85 };
-  }
-
-  // C - Curved hand (approximation)
-  if (extendedCount >= 3 && Math.abs(thumb_tip.x - pinky_tip.x) < 0.15) {
-    return { letter: "C", confidence: 0.75 };
-  }
-
-  // D - Index up, others touching thumb
-  if (fingersExtended.index && !fingersExtended.middle && !fingersExtended.ring && !fingersExtended.pinky) {
-    return { letter: "D", confidence: 0.8 };
-  }
-
-  // E - All fingers curled
-  if (!fingersExtended.index && !fingersExtended.middle && !fingersExtended.ring && !fingersExtended.pinky && !fingersExtended.thumb) {
-    return { letter: "E", confidence: 0.8 };
-  }
-
-  // F - Index and thumb touching, others extended
-  if (!fingersExtended.index && fingersExtended.middle && fingersExtended.ring && fingersExtended.pinky) {
-    return { letter: "F", confidence: 0.75 };
-  }
-
-  // I - Pinky up only
-  if (!fingersExtended.index && !fingersExtended.middle && !fingersExtended.ring && fingersExtended.pinky) {
-    return { letter: "I", confidence: 0.85 };
-  }
-
-  // L - L shape with thumb and index
-  if (fingersExtended.thumb && fingersExtended.index && !fingersExtended.middle && !fingersExtended.ring && !fingersExtended.pinky) {
-    if (Math.abs(thumb_tip.x - wrist.x) > 0.1) {
-      return { letter: "L", confidence: 0.85 };
-    }
-  }
-
-  // O - All fingers curved to meet thumb
-  if (extendedCount === 0 || (extendedCount === 1 && fingersExtended.thumb)) {
-    const distance = Math.sqrt(
-      Math.pow(thumb_tip.x - index_tip.x, 2) + Math.pow(thumb_tip.y - index_tip.y, 2)
-    );
-    if (distance < 0.08) {
-      return { letter: "O", confidence: 0.75 };
-    }
-  }
-
-  // V - Peace sign (index and middle up)
-  if (fingersExtended.index && fingersExtended.middle && !fingersExtended.ring && !fingersExtended.pinky) {
-    return { letter: "V", confidence: 0.85 };
-  }
-
-  // W - Three fingers up
-  if (fingersExtended.index && fingersExtended.middle && fingersExtended.ring && !fingersExtended.pinky) {
-    return { letter: "W", confidence: 0.85 };
-  }
-
-  // Y - Thumb and pinky out
-  if (fingersExtended.thumb && !fingersExtended.index && !fingersExtended.middle && !fingersExtended.ring && fingersExtended.pinky) {
-    return { letter: "Y", confidence: 0.85 };
-  }
-
-  // 5 / Open palm - All fingers extended
-  if (extendedCount === 5) {
-    return { letter: "5", confidence: 0.9 };
-  }
-
-  return { letter: "", confidence: 0 };
-};
-
 const HandDetector = ({ onDetection, isActive }: HandDetectorProps) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const handsRef = useRef<Hands | null>(null);
   const cameraRef = useRef<Camera | null>(null);
+  const stabilizerRef = useRef<DetectionStabilizer>(new DetectionStabilizer(4, 3));
+  const lastFrameTimeRef = useRef<number>(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [fps, setFps] = useState(0);
 
   const onResults = useCallback((results: Results) => {
     const canvasElement = canvasRef.current;
@@ -139,16 +27,26 @@ const HandDetector = ({ onDetection, isActive }: HandDetectorProps) => {
     
     if (!canvasElement || !videoElement) return;
 
-    const ctx = canvasElement.getContext("2d");
+    // FPS calculation
+    const now = performance.now();
+    if (lastFrameTimeRef.current) {
+      const delta = now - lastFrameTimeRef.current;
+      setFps(Math.round(1000 / delta));
+    }
+    lastFrameTimeRef.current = now;
+
+    const ctx = canvasElement.getContext("2d", { alpha: false });
     if (!ctx) return;
 
-    canvasElement.width = videoElement.videoWidth;
-    canvasElement.height = videoElement.videoHeight;
+    // Set canvas size once or when video size changes
+    if (canvasElement.width !== videoElement.videoWidth) {
+      canvasElement.width = videoElement.videoWidth;
+      canvasElement.height = videoElement.videoHeight;
+    }
 
     ctx.save();
-    ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
     
-    // Mirror the video
+    // Mirror and draw video
     ctx.translate(canvasElement.width, 0);
     ctx.scale(-1, 1);
     ctx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
@@ -162,10 +60,10 @@ const HandDetector = ({ onDetection, isActive }: HandDetectorProps) => {
           x: 1 - l.x
         }));
 
-        // Draw connections with custom style
+        // Draw connections with optimized style
         drawConnectors(ctx, mirroredLandmarks, HAND_CONNECTIONS, {
           color: "hsl(38, 92%, 50%)",
-          lineWidth: 3,
+          lineWidth: 2,
         });
         
         // Draw landmarks
@@ -173,18 +71,32 @@ const HandDetector = ({ onDetection, isActive }: HandDetectorProps) => {
           color: "hsl(230, 70%, 60%)",
           fillColor: "hsl(38, 92%, 50%)",
           lineWidth: 1,
-          radius: 4,
+          radius: 3,
         });
 
-        // Recognize letter
+        // Recognize letter with stabilization
         const { letter, confidence } = recognizeASLLetter(landmarks);
-        if (letter && confidence > 0.7) {
-          onDetection(letter, confidence);
+        const stableLetter = stabilizerRef.current.addDetection(letter);
+        
+        if (stableLetter && confidence > 0.65) {
+          onDetection(stableLetter, confidence);
+          
+          // Draw detected letter on canvas
+          ctx.save();
+          ctx.font = "bold 48px Inter";
+          ctx.fillStyle = "hsl(38, 92%, 50%)";
+          ctx.strokeStyle = "hsl(230, 20%, 10%)";
+          ctx.lineWidth = 3;
+          const text = stableLetter;
+          ctx.strokeText(text, 20, 60);
+          ctx.fillText(text, 20, 60);
+          ctx.restore();
         } else {
           onDetection(null, 0);
         }
       }
     } else {
+      stabilizerRef.current.reset();
       onDetection(null, 0);
     }
   }, [onDetection]);
@@ -194,6 +106,7 @@ const HandDetector = ({ onDetection, isActive }: HandDetectorProps) => {
       if (cameraRef.current) {
         cameraRef.current.stop();
       }
+      stabilizerRef.current.reset();
       return;
     }
 
@@ -208,10 +121,11 @@ const HandDetector = ({ onDetection, isActive }: HandDetectorProps) => {
           },
         });
 
+        // Optimized settings for speed
         hands.setOptions({
           maxNumHands: 1,
-          modelComplexity: 1,
-          minDetectionConfidence: 0.7,
+          modelComplexity: 0, // Use lite model for speed
+          minDetectionConfidence: 0.6,
           minTrackingConfidence: 0.5,
         });
 
@@ -255,6 +169,13 @@ const HandDetector = ({ onDetection, isActive }: HandDetectorProps) => {
 
   return (
     <div className="relative w-full aspect-[4/3] rounded-2xl overflow-hidden glass-card">
+      {/* FPS Counter */}
+      {!isLoading && !error && (
+        <div className="absolute top-3 right-3 z-20 px-2 py-1 rounded-md bg-black/60 text-xs font-mono text-success">
+          {fps} FPS
+        </div>
+      )}
+
       {isLoading && (
         <div className="absolute inset-0 flex items-center justify-center bg-card z-10">
           <div className="flex flex-col items-center gap-4">
