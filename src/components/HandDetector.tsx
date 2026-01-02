@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Results } from "@mediapipe/hands";
-import { drawConnectors, drawLandmarks } from "@mediapipe/drawing_utils";
-import { HAND_CONNECTIONS } from "@mediapipe/hands";
+import type { Results } from "@mediapipe/hands";
 import { recognizeASLLetter, DetectionStabilizer } from "@/lib/aslRecognition";
 
 // Declare global type for CDN loaded MediaPipe
 declare global {
   interface Window {
     Hands: any;
+    drawConnectors: any;
+    drawLandmarks: any;
+    HAND_CONNECTIONS: any;
   }
 }
 
@@ -71,18 +72,22 @@ const HandDetector = ({ onDetection, isActive }: HandDetectorProps) => {
         }));
 
         // Draw connections with optimized style
-        drawConnectors(ctx, mirroredLandmarks, HAND_CONNECTIONS, {
-          color: "hsl(38, 92%, 50%)",
-          lineWidth: 2,
-        });
+        if (window.drawConnectors && window.HAND_CONNECTIONS) {
+          window.drawConnectors(ctx, mirroredLandmarks, window.HAND_CONNECTIONS, {
+            color: "hsl(38, 92%, 50%)",
+            lineWidth: 2,
+          });
+        }
 
         // Draw landmarks
-        drawLandmarks(ctx, mirroredLandmarks, {
-          color: "hsl(230, 70%, 60%)",
-          fillColor: "hsl(38, 92%, 50%)",
-          lineWidth: 1,
-          radius: 3,
-        });
+        if (window.drawLandmarks) {
+          window.drawLandmarks(ctx, mirroredLandmarks, {
+            color: "hsl(230, 70%, 60%)",
+            fillColor: "hsl(38, 92%, 50%)",
+            lineWidth: 1,
+            radius: 3,
+          });
+        }
 
         // Recognize letter with stabilization
         const { letter, confidence } = recognizeASLLetter(landmarks);
