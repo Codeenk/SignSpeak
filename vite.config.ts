@@ -19,7 +19,7 @@ export default defineConfig(({ mode }) => ({
       output: {
         manualChunks: {
           vendor: ["react", "react-dom", "react-router-dom"],
-          mediapipe: ["@mediapipe/hands", "@mediapipe/drawing_utils", "@mediapipe/camera_utils"],
+          mediapipe: ["@mediapipe/hands", "@mediapipe/drawing_utils"],
           ui: ["@radix-ui/react-dialog", "@radix-ui/react-slot", "lucide-react"],
         },
       },

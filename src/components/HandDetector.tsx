@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { Hands, Results } from "@mediapipe/hands";
-import { Camera } from "@mediapipe/camera_utils";
 import { drawConnectors, drawLandmarks } from "@mediapipe/drawing_utils";
 import { HAND_CONNECTIONS } from "@mediapipe/hands";
 import { recognizeASLLetter, DetectionStabilizer } from "@/lib/aslRecognition";
@@ -14,18 +13,17 @@ const HandDetector = ({ onDetection, isActive }: HandDetectorProps) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const handsRef = useRef<Hands | null>(null);
-  const cameraRef = useRef<Camera | null>(null);
   const stabilizerRef = useRef<DetectionStabilizer>(new DetectionStabilizer(4, 3));
   const lastFrameTimeRef = useRef<number>(0);
+  const requestRef = useRef<number>();
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [fps, setFps] = useState(0);
 
   const onResults = useCallback((results: Results) => {
     const canvasElement = canvasRef.current;
-    const videoElement = videoRef.current;
-    
-    if (!canvasElement || !videoElement) return;
+
+    if (!canvasElement) return;
 
     // FPS calculation
     const now = performance.now();
@@ -38,14 +36,10 @@ const HandDetector = ({ onDetection, isActive }: HandDetectorProps) => {
     const ctx = canvasElement.getContext("2d", { alpha: false });
     if (!ctx) return;
 
-    // Set canvas size once or when video size changes
-    if (canvasElement.width !== videoElement.videoWidth) {
-      canvasElement.width = videoElement.videoWidth;
-      canvasElement.height = videoElement.videoHeight;
-    }
+    // Canvas sizing is handled in the setupCamera function now to ensure sync
 
     ctx.save();
-    
+
     // Mirror and draw video
     ctx.translate(canvasElement.width, 0);
     ctx.scale(-1, 1);
@@ -65,7 +59,7 @@ const HandDetector = ({ onDetection, isActive }: HandDetectorProps) => {
           color: "hsl(38, 92%, 50%)",
           lineWidth: 2,
         });
-        
+
         // Draw landmarks
         drawLandmarks(ctx, mirroredLandmarks, {
           color: "hsl(230, 70%, 60%)",
@@ -77,10 +71,10 @@ const HandDetector = ({ onDetection, isActive }: HandDetectorProps) => {
         // Recognize letter with stabilization
         const { letter, confidence } = recognizeASLLetter(landmarks);
         const stableLetter = stabilizerRef.current.addDetection(letter);
-        
+
         if (stableLetter && confidence > 0.65) {
           onDetection(stableLetter, confidence);
-          
+
           // Draw detected letter on canvas
           ctx.save();
           ctx.font = "bold 48px Inter";
@@ -101,30 +95,51 @@ const HandDetector = ({ onDetection, isActive }: HandDetectorProps) => {
     }
   }, [onDetection]);
 
+  const detect = useCallback(async () => {
+    if (
+      videoRef.current &&
+      videoRef.current.readyState === 4 &&
+      handsRef.current
+    ) {
+      await handsRef.current.send({ image: videoRef.current });
+    }
+    if (isActive) {
+      requestRef.current = requestAnimationFrame(detect);
+    }
+  }, [isActive]);
+
   useEffect(() => {
+    // If not active, cleanup and return
     if (!isActive) {
-      if (cameraRef.current) {
-        cameraRef.current.stop();
+      if (videoRef.current && videoRef.current.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach(track => track.stop());
+        videoRef.current.srcObject = null;
+      }
+      if (requestRef.current) {
+        cancelAnimationFrame(requestRef.current);
       }
       stabilizerRef.current.reset();
       return;
     }
 
-    const initializeHands = async () => {
+    let isMounted = true;
+
+    const initialize = async () => {
       try {
         setIsLoading(true);
         setError(null);
 
+        // Initialize Mediapipe Hands
         const hands = new Hands({
           locateFile: (file) => {
             return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
           },
         });
 
-        // Optimized settings for speed
         hands.setOptions({
           maxNumHands: 1,
-          modelComplexity: 0, // Use lite model for speed
+          modelComplexity: 0,
           minDetectionConfidence: 0.6,
           minTrackingConfidence: 0.5,
         });
@@ -132,40 +147,61 @@ const HandDetector = ({ onDetection, isActive }: HandDetectorProps) => {
         hands.onResults(onResults);
         handsRef.current = hands;
 
-        if (videoRef.current) {
-          const camera = new Camera(videoRef.current, {
-            onFrame: async () => {
-              if (handsRef.current && videoRef.current) {
-                await handsRef.current.send({ image: videoRef.current });
-              }
-            },
-            width: 640,
-            height: 480,
-          });
+        // Initialize Camera
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+            facingMode: "user"
+          }
+        });
 
-          await camera.start();
-          cameraRef.current = camera;
+        if (!isMounted) {
+          stream.getTracks().forEach(t => t.stop());
+          return;
         }
 
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          // Wait for metadata to load to set canvas size
+          videoRef.current.onloadedmetadata = () => {
+            if (videoRef.current && canvasRef.current) {
+              videoRef.current.play();
+              canvasRef.current.width = videoRef.current.videoWidth;
+              canvasRef.current.height = videoRef.current.videoHeight;
+              setIsLoading(false);
+              detect();
+            }
+          };
+        }
+
+      } catch (err: any) {
+        console.error("Error initializing:", err);
         setIsLoading(false);
-      } catch (err) {
-        console.error("Error initializing hand detection:", err);
-        setError("Failed to initialize camera. Please ensure camera permissions are granted.");
-        setIsLoading(false);
+        if (err.name === 'NotAllowedError') {
+          setError("Permission to access camera was denied. Please allow camera access.");
+        } else if (err.name === 'NotFoundError') {
+          setError("No camera found. Please connect a camera.");
+        } else {
+          setError("Failed to initialize camera. Please try again.");
+        }
       }
     };
 
-    initializeHands();
+    initialize();
 
     return () => {
-      if (cameraRef.current) {
-        cameraRef.current.stop();
+      isMounted = false;
+      if (requestRef.current) cancelAnimationFrame(requestRef.current);
+      if (videoRef.current && videoRef.current.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach(track => track.stop());
       }
       if (handsRef.current) {
         handsRef.current.close();
       }
-    };
-  }, [isActive, onResults]);
+    }
+  }, [isActive, onResults, detect]);
 
   return (
     <div className="relative w-full aspect-[4/3] rounded-2xl overflow-hidden glass-card">
@@ -177,23 +213,23 @@ const HandDetector = ({ onDetection, isActive }: HandDetectorProps) => {
       )}
 
       {isLoading && (
-        <div className="absolute inset-0 flex items-center justify-center bg-card z-10">
+        <div className="absolute inset-0 flex items-center justify-center bg-card z-10 w-full h-full">
           <div className="flex flex-col items-center gap-4">
             <div className="w-12 h-12 border-4 border-primary/30 border-t-primary rounded-full animate-spin" />
-            <p className="text-muted-foreground">Loading hand detection model...</p>
+            <p className="text-muted-foreground">Starting camera...</p>
           </div>
         </div>
       )}
-      
+
       {error && (
-        <div className="absolute inset-0 flex items-center justify-center bg-card z-10">
+        <div className="absolute inset-0 flex items-center justify-center bg-card z-10 w-full h-full">
           <div className="flex flex-col items-center gap-4 p-6 text-center">
             <div className="w-16 h-16 rounded-full bg-destructive/20 flex items-center justify-center">
               <svg className="w-8 h-8 text-destructive" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
               </svg>
             </div>
-            <p className="text-destructive">{error}</p>
+            <p className="text-destructive font-medium">{error}</p>
           </div>
         </div>
       )}
@@ -202,6 +238,7 @@ const HandDetector = ({ onDetection, isActive }: HandDetectorProps) => {
         ref={videoRef}
         className="absolute inset-0 w-full h-full object-cover opacity-0"
         playsInline
+        muted
       />
       <canvas
         ref={canvasRef}
