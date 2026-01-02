@@ -1,8 +1,15 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Hands, Results } from "@mediapipe/hands";
+import { Results } from "@mediapipe/hands";
 import { drawConnectors, drawLandmarks } from "@mediapipe/drawing_utils";
 import { HAND_CONNECTIONS } from "@mediapipe/hands";
 import { recognizeASLLetter, DetectionStabilizer } from "@/lib/aslRecognition";
+
+// Declare global type for CDN loaded MediaPipe
+declare global {
+  interface Window {
+    Hands: any;
+  }
+}
 
 interface HandDetectorProps {
   onDetection: (letter: string | null, confidence: number) => void;
@@ -12,7 +19,16 @@ interface HandDetectorProps {
 const HandDetector = ({ onDetection, isActive }: HandDetectorProps) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const handsRef = useRef<Hands | null>(null);
+  const handsRef = useRef<any>(null);
+  // ...
+  // Finding the part to replace is tricky with contiguous block.
+  // I'll replace the top block imports and then the initialization block logic where `new Hands` is called.
+  // Actually, I can do it in two chunks.
+  // WAIT, I must use `multi_replace_file_content` if I want to edit two places.
+  // Or just replace the imports now and `new Hands` later?
+  // No, the tool replace_file_content is for SINGLE BLOCK. `multi_replace_file_content` is valid.
+
+  // I will use multi_replace for imports + new Hands usage.
   const stabilizerRef = useRef<DetectionStabilizer>(new DetectionStabilizer(4, 3));
   const lastFrameTimeRef = useRef<number>(0);
   const requestRef = useRef<number>();
@@ -131,8 +147,13 @@ const HandDetector = ({ onDetection, isActive }: HandDetectorProps) => {
         setError(null);
 
         // Initialize Mediapipe Hands
-        const hands = new Hands({
-          locateFile: (file) => {
+        // Initialize Mediapipe Hands from global CDN
+        if (typeof window.Hands === 'undefined') {
+          throw new Error("MediaPipe Hands not loaded yet");
+        }
+
+        const hands = new window.Hands({
+          locateFile: (file: string) => {
             return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
           },
         });
